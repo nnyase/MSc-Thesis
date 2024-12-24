@@ -5,6 +5,7 @@ from scipy.stats import pearsonr
 from tqdm import tqdm
 import math
 from gudhi.representations import Landscape
+import pandas as pd
 
 def compute_distance_correlation_matrix(DF):
     
@@ -19,7 +20,7 @@ def compute_distance_correlation_matrix(DF):
     
     dist = dist + dist.T + np.eye(num_genes)
     
-    return 1 - dist
+    return  dist
 
 def compute_pearson_correlation_matrix(DF: np.ndarray) -> np.ndarray:
     """
@@ -43,7 +44,8 @@ def compute_pearson_correlation_matrix(DF: np.ndarray) -> np.ndarray:
                 corr_matrix[i, j] = corr
                 corr_matrix[j, i] = corr  # Symmetric matrix
 
-    return corr_matrix
+
+    return 1- corr_matrix
 
 def patient_correlation_measure(F, M):
     
@@ -62,18 +64,20 @@ def patient_correlation_measure(F, M):
 
 def compute_wto_matrix(gene_exp_arr: np.ndarray, adj_matrix="dc")-> np.ndarray:
     """
-    Compute the Signed Weighted Topological Overlap (wTO) matrix.
+    Compute the Weighted Topological Overlap (wTO) matrix.
 
     Parameters:
     - df: np.ndarray, input data.
 
     Returns:
-    - wto_matrix: np.ndarray, Signed Topological Overlap matrix
+    - wto_matrix: np.ndarray, Topological Overlap matrix
     """
     if adj_matrix == "dc":
         adjacency_matrix = compute_distance_correlation_matrix(DF=gene_exp_arr)
     elif adj_matrix == "pearsons":
         adjacency_matrix = compute_pearson_correlation_matrix(DF=gene_exp_arr)
+    else:
+        raise ValueError("Invalid adjacency matrix type. Choose 'dc' or 'pearsons'.")
 
     num_genes = adjacency_matrix.shape[0]
     wto_matrix = np.zeros((num_genes, num_genes))
@@ -96,6 +100,71 @@ def compute_wto_matrix(gene_exp_arr: np.ndarray, adj_matrix="dc")-> np.ndarray:
 
     return wto_matrix
 
+def wgtda(preprocessing: np.ndarray, dimensions=3, gene_dict=None):
+
+    interactions_list = []
+
+    interactions = pd.DataFrame(
+        columns=['interaction_id', 'betti_number', 'birth', 'death', 'lifespan', 'birth_nodes',
+                 'death_nodes', 'birth_geneset',
+                 'death_geneset', 'geneset'])
+
+    """
+    Construct a Vietoris-Rips complex from the specified preprocessing matrix and compute its persistent homology.
+
+    Parameters:
+    - preprocessing : ndarray
+        A square matrix where element [i, j] represents the distance between the i-th and j-th elements.
+    - dimension : int, default = 3
+        The maximum dimension of simplices to be considered in the Vietoris-Rips complex. Default is 3.
+
+    Returns:
+    - tuple[PersistentHomologyComputer, FilteredSimplicialComplex]
+        A tuple containing the persistent homology computer and the Vietoris-Rips complex.
+        The PersistentHomologyComputer object has methods to access and manipulate the computed homology.
+        The FilteredSimplicialComplex object represents the simplicial complex constructed from the given distance matrix.
+
+    Notes:
+    - The function uses the 'matilda' library, which must be installed and properly configured in the environment.
+    - This function is intended for use in computational topology, particularly in the analysis of high-dimensional data.
+
+    Examples:
+    - Constructing the complex and computing homology for a given distance matrix:
+         matrix = np.array([[0, 1, 1.5], [1, 0, 2], [1.5, 2, 0]])
+     persistence, rips_complex = VRcomplex(matrix, dimension=2)
+    """
+    # Create a FilteredSimplicialComplex object
+
+    rips_complex = gd.RipsComplex(distance_matrix=preprocessing, max_edge_length=float('Inf')).create_simplex_tree(
+                max_dimension=dimensions)  # Weights used include per-patient gene expressions
+    rips_complex.collapse_edges()
+    rips_complex.expansion(3)
+
+    # Construct the Vietoris-Rips complex from the preprocessed distance matrix
+    betti_pairs = rips_complex.persistence(persistence_dim_max=3)
+
+    betti_pairs.reverse()
+    persistence_pairs = rips_complex.persistence_pairs()
+
+    for index, ((betti_number, (birth, death)), (birth_nodes, death_nodes)) in enumerate(
+            zip(betti_pairs, persistence_pairs)):
+            birth_genes = [gene_dict[item] for item in birth_nodes]
+            death_genes = [gene_dict[item] for item in death_nodes]
+            gene_set = birth_genes + death_genes
+            lifespan = death - birth
+            interaction = [
+                index, betti_number, birth, death, lifespan, birth_nodes, death_nodes, birth_genes, death_genes,
+                gene_set
+            ]
+            interactions_list.append(interaction)
+
+             # Create a DataFrame from the NumPy array
+    new_interactions = pd.DataFrame(interactions_list, columns=interactions.columns)
+
+    # Concatenate the new interactions with the existing DataFrame
+    interactions = pd.concat([interactions, new_interactions], ignore_index=True)
+
+    return interactions
 
 def compute_simplicial_complex_and_landscapes(patient_data: np.ndarray, dist_corr_matrix: np.ndarray, num_landscape=2, resolution=10, dim=2):
     """
